@@ -372,6 +372,14 @@ function startTilt() {
   if (src === 'tilt' || events > 0) return;
   src = 'tilt'; needCalib = true;
   window.addEventListener('devicemotion', onMotion);
+  if (window.Gyroscope) {
+    try {
+      const g = new Gyroscope({ frequency: 60 });
+      g.addEventListener('reading', () => { T.rx = g.x / D2R; T.ry = g.y / D2R; T.rz = g.z / D2R; T.gAt = performance.now(); });
+      g.addEventListener('error', ev => { T.gErr = ev.error.name; });
+      g.start();
+    } catch (err) { T.gErr = err.name; }
+  } else T.gErr = 'unsupported';
   dbg('sensor: tilt mode, waiting for accelerometer...');
 }
 // T.p = pointing axis: 'Y' = top edge is the barrel (pistol grip or flat), 'nZ' = back of phone (upright, camera style)
@@ -395,17 +403,24 @@ function onMotion(e) {
     calib.tx = 0; calib.ty = 0; needCalib = false;
   }
 
-  // left/right: integrate the gyroscope if the phone reports one, otherwise use wrist twist
-  const r = e.rotationRate;
-  const hasRate = !!(r && r.alpha != null);
-  if (hasRate) T.gyroSum += Math.abs(r.alpha) + Math.abs(r.beta) + Math.abs(r.gamma);
+  // left/right: Gyroscope API, then devicemotion rotationRate, else wrist twist
   T.n++;
-  const useGyro = hasRate && (T.n < 90 || T.gyroSum > 0);
+  let rate = null;
+  if (T.gAt && now - T.gAt < 300) { rate = [T.rx, T.ry, T.rz]; T.ysrc = 'gyro-api'; }
+  else {
+    const r = e.rotationRate;
+    if (r && r.alpha != null) {
+      T.gyroSum += Math.abs(r.alpha) + Math.abs(r.beta) + Math.abs(r.gamma);
+      if (T.n < 90 || T.gyroSum > 0) { rate = [r.beta, r.gamma, r.alpha]; T.ysrc = 'rotationRate'; }
+    }
+  }
+  const useGyro = !!rate;
   if (useGyro) {
-    const w = r.beta * ux + r.gamma * uy + r.alpha * uz;   // turn rate around the vertical axis (deg/s)
+    const w = rate[0] * ux + rate[1] * uy + rate[2] * uz;   // turn rate around the vertical axis (deg/s)
     if (Math.abs(w) > 0.3) T.yaw -= w * dt;
     cur.tx = T.yaw;
   } else {
+    T.ysrc = 'twist';
     cur.tx = (T.p === 'Y' ? 1 : -1) * shortDiff(roll, T.roll0);
   }
   cur.ty = pitch - T.pitch0;
@@ -546,7 +561,7 @@ function sendAim(force) {
     yaw = shortDiff(y, calib.yaw);
     pitch = p - calib.pitch;
   }
-  if (now - lastDbg > 250) { lastDbg = now; dbg('sensor: ' + src + ' | events ' + events + ' | yaw ' + yaw.toFixed(0) + ' pitch ' + pitch.toFixed(0)); }
+  if (now - lastDbg > 250) { lastDbg = now; dbg('sensor: ' + src + (src === 'tilt' ? '/' + T.ysrc + (T.gErr ? ' (gyro: ' + T.gErr + ')' : '') : '') + ' | events ' + events + ' | yaw ' + yaw.toFixed(0) + ' pitch ' + pitch.toFixed(0)); }
   send({ type: 'aim', yaw: yaw + touchOff.yaw, pitch: pitch + touchOff.pitch, sens });
 }
 function shortDiff(a, b) { let d = a - b; while (d < -180) d += 360; while (d > 180) d -= 360; return d; }
