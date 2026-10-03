@@ -1,496 +1,472 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WebRTC Motion Shooter</title>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            user-select: none;
-        }
-
-        body {
-            background-color: #1a1a2e;
-            color: #fff;
-            overflow: hidden;
-            touch-action: none;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            width: 100vw;
-        }
-
-        .screen {
-            display: none;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            height: 100%;
-            padding: 20px;
-            text-align: center;
-        }
-
-        .screen.active {
-            display: flex;
-        }
-
-        h1, h2 { margin-bottom: 20px; }
-
-        .btn {
-            padding: 15px 30px;
-            margin: 10px;
-            font-size: 1.2rem;
-            font-weight: bold;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: transform 0.1s;
-        }
-
-        .btn:active { transform: scale(0.95); }
-        .btn.primary { background-color: #0f3460; color: white; }
-        .btn.secondary { background-color: #e94560; color: white; }
-        .btn.danger { background-color: #e63946; color: white; }
-        .btn.small { padding: 8px 15px; font-size: 0.9rem; background: #555; }
-        .btn.big-btn {
-            width: 90%;
-            height: 40vh;
-            font-size: 3rem;
-            border-radius: 20px;
-            margin-top: 20px;
-            box-shadow: 0 10px 0 #b32b36;
-        }
-        .btn.big-btn:active { box-shadow: 0 2px 0 #b32b36; transform: translateY(8px); }
-
-        .room-code-display {
-            font-size: 4rem;
-            letter-spacing: 10px;
-            font-weight: bold;
-            color: #e94560;
-            background: #111;
-            padding: 20px 40px;
-            border-radius: 10px;
-            margin: 20px 0;
-        }
-
-        input[type="text"] {
-            font-size: 2rem;
-            padding: 15px;
-            text-align: center;
-            text-transform: uppercase;
-            width: 80%;
-            max-width: 300px;
-            border-radius: 8px;
-            border: 2px solid #ccc;
-            margin-bottom: 20px;
-        }
-
-        .hidden { display: none !important; }
-        .status-msg { margin-top: 15px; color: #aaa; }
-
-        #screen-host-game { padding: 0; align-items: flex-start; justify-content: flex-start; }
-        #game-canvas { display: block; width: 100vw; height: 100vh; background: #000; }
-        #game-ui {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            right: 20px;
-            display: flex;
-            justify-content: space-between;
-            pointer-events: none;
-        }
-        .hud { font-size: 1.5rem; font-weight: bold; background: rgba(0,0,0,0.5); padding: 10px 20px; border-radius: 8px; }
-
-        .controller-header {
-            position: absolute;
-            top: 10px; left: 10px; right: 10px;
-            display: flex; justify-content: space-between; align-items: center;
-        }
-        #controller-ui { width: 100%; display: flex; flex-direction: column; align-items: center; }
-        .controls-top { display: flex; flex-direction: column; align-items: center; width: 100%; margin-top: 50px; }
-        .slider-group { margin-top: 15px; display: flex; flex-direction: column; align-items: center; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Motion Shooter</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+:root { --bg:#10141c; --panel:#1a2130; --ink:#f2f4f8; --dim:#8d97aa; --amber:#ffb703; --red:#ef476f; --green:#3ddc97; }
+* { box-sizing:border-box; margin:0; padding:0; -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
+html, body { height:100%; }
+body { background:var(--bg); color:var(--ink); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; overflow:hidden; touch-action:none; }
+.screen { display:none; position:absolute; inset:0; flex-direction:column; align-items:center; justify-content:center; padding:20px; text-align:center; gap:14px; }
+.screen.active { display:flex; }
+h1 { font-size:clamp(2.2rem,6vw,3.6rem); font-weight:900; letter-spacing:-.02em; }
+h2 { font-size:1.6rem; font-weight:800; }
+p { color:var(--dim); max-width:34ch; line-height:1.4; }
+.btn { padding:14px 28px; font-size:1.05rem; font-weight:700; border:0; border-radius:10px; cursor:pointer; color:var(--ink); background:var(--panel); transition:transform .08s; }
+.btn:active { transform:scale(.96); }
+.btn.primary { background:var(--amber); color:#1a1300; }
+.btn.danger { background:var(--red); }
+.btn.small { padding:8px 14px; font-size:.85rem; }
+.hidden { display:none !important; }
+.code { font-size:clamp(3rem,10vw,5.5rem); font-weight:900; letter-spacing:.25em; padding:10px 10px 10px calc(10px + .25em); background:#000; border:2px solid var(--amber); border-radius:12px; color:var(--amber); }
+input[type=text] { font-size:2rem; padding:12px; text-align:center; text-transform:uppercase; width:min(80%,300px); border-radius:10px; border:2px solid var(--panel); background:#0b0e14; color:var(--ink); outline:none; }
+input[type=text]:focus { border-color:var(--amber); }
+.status { min-height:1.4em; color:var(--dim); }
+.status.ok { color:var(--green); } .status.bad { color:var(--red); }
+/* host game */
+#screen-host-game { padding:0; }
+#game-canvas { position:absolute; inset:0; width:100%; height:100%; background:#0a0d13; cursor:none; }
+#hud { position:absolute; top:16px; left:16px; right:16px; display:flex; justify-content:space-between; gap:10px; pointer-events:none; }
+.hud { background:rgba(0,0,0,.55); padding:8px 16px; border-radius:8px; font-weight:800; font-size:1.3rem; font-variant-numeric:tabular-nums; }
+.hud small { color:var(--dim); font-weight:600; font-size:.8rem; margin-right:6px; }
+#overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; background:rgba(10,13,19,.82); }
+#countdown { font-size:9rem; font-weight:900; color:var(--amber); }
+/* controller */
+.ctl-head { position:absolute; top:calc(10px + env(safe-area-inset-top)); left:12px; right:12px; display:flex; justify-content:space-between; align-items:center; font-weight:700; }
+#ctl-ui { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding-top:50px; }
+.row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:center; }
+input[type=range] { width:200px; accent-color:var(--amber); }
+#btn-shoot { width:92%; flex:1; max-height:46vh; font-size:2.6rem; font-weight:900; border-radius:24px; background:var(--red); color:#fff; border:0; box-shadow:0 10px 0 #a52f4d; touch-action:none; }
+#btn-shoot:active { transform:translateY(8px); box-shadow:0 2px 0 #a52f4d; }
+#pad { width:92%; height:22vh; border:2px dashed var(--dim); border-radius:16px; display:flex; align-items:center; justify-content:center; color:var(--dim); touch-action:none; }
+#ctl-score { font-size:1.2rem; font-weight:800; color:var(--amber); font-variant-numeric:tabular-nums; }
+</style>
 </head>
 <body>
 
-    <!-- SCREEN 1: Main Menu -->
-    <div id="screen-home" class="screen active">
-        <h1>Motion Shooter</h1>
-        <button id="btn-start-host" class="btn primary">START GAME (LAPTOP/TV)</button>
-        <button id="btn-start-phone" class="btn secondary">CONNECT PHONE CONTROLLER</button>
+<div id="screen-home" class="screen active">
+  <h1>Motion Shooter</h1>
+  <p>Show the game on a laptop or TV. Use your phone as the gun.</p>
+  <button id="btn-start-host" class="btn primary">Host game (laptop / TV)</button>
+  <button id="btn-start-phone" class="btn">Use phone as controller</button>
+</div>
+
+<div id="screen-host-lobby" class="screen">
+  <h2>Enter this code on your phone</h2>
+  <div class="code" id="host-room-code">----</div>
+  <p class="status" id="host-status">Waiting for phone...</p>
+  <button id="btn-start-round" class="btn primary hidden">Start round</button>
+</div>
+
+<div id="screen-host-game" class="screen">
+  <canvas id="game-canvas"></canvas>
+  <div id="hud">
+    <div class="hud"><small>Score</small><span id="ui-score">0</span></div>
+    <div class="hud"><small>Streak</small>x<span id="ui-mult">1</span></div>
+    <div class="hud"><small>Accuracy</small><span id="ui-acc">0</span>%</div>
+    <div class="hud"><small>Time</small><span id="ui-time">60</span></div>
+  </div>
+  <div id="overlay" class="hidden"></div>
+</div>
+
+<div id="screen-phone-join" class="screen">
+  <h2>Connect to game</h2>
+  <input type="text" id="input-room-code" placeholder="CODE" maxlength="4" autocomplete="off" autocapitalize="characters">
+  <button id="btn-connect" class="btn primary">Connect</button>
+  <p class="status" id="phone-status"></p>
+</div>
+
+<div id="screen-phone-controller" class="screen">
+  <div class="ctl-head">
+    <span id="ctl-score">Score 0</span>
+    <button id="btn-disconnect" class="btn small">Disconnect</button>
+  </div>
+  <div id="motion-gate" class="screen active" style="gap:14px">
+    <h2>Enable motion aiming</h2>
+    <p>Your phone's motion sensors steer the crosshair.</p>
+    <button id="btn-enable-motion" class="btn primary">Enable motion</button>
+    <p class="status" id="motion-status"></p>
+  </div>
+  <div id="ctl-ui" class="hidden">
+    <p class="status" id="ctl-msg">Point at the screen, then press Calibrate.</p>
+    <div class="row">
+      <button id="btn-calibrate" class="btn primary">Calibrate aim</button>
+      <label class="row">Sensitivity <input type="range" id="slider-sens" min="5" max="30" value="15"></label>
     </div>
+    <div id="pad" class="hidden">No motion sensor data. Drag here to aim.</div>
+    <button id="btn-shoot">SHOOT</button>
+  </div>
+</div>
 
-    <!-- SCREEN 2: Host Lobby -->
-    <div id="screen-host-lobby" class="screen">
-        <h2>Host Game</h2>
-        <p>Open this website on your phone and enter this code:</p>
-        <div class="room-code-display" id="host-room-code">----</div>
-        <p class="status-msg" id="host-status">Waiting for phone...</p>
-        <button id="btn-start-round" class="btn primary hidden">START ROUND</button>
-    </div>
+<script>
+/* ===== Shared ===== */
+let peer = null, dataConn = null;
+const $ = id => document.getElementById(id);
+function showScreen(id) {
+  document.querySelectorAll('body > .screen').forEach(s => s.classList.remove('active'));
+  $(id).classList.add('active');
+}
+function send(msg) { if (dataConn && dataConn.open) dataConn.send(msg); }
+const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ';
 
-    <!-- SCREEN 3: Host Game Canvas -->
-    <div id="screen-host-game" class="screen">
-        <div id="game-ui">
-            <div class="hud">Score: <span id="ui-score">0</span></div>
-            <div class="hud">Time: <span id="ui-time">60</span>s</div>
-            <div class="hud">Hits: <span id="ui-hits">0</span> | Misses: <span id="ui-misses">0</span></div>
-        </div>
-        <canvas id="game-canvas"></canvas>
-    </div>
+/* ===== Audio ===== */
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+function tone(freq, type, dur, vol = 0.15) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime;
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(t); o.stop(t + dur);
+}
 
-    <!-- SCREEN 4: Phone Join -->
-    <div id="screen-phone-join" class="screen">
-        <h2>Connect to Game</h2>
-        <input type="text" id="input-room-code" placeholder="Enter 4-letter code" maxlength="4">
-        <button id="btn-connect" class="btn primary">CONNECT</button>
-        <p class="status-msg" id="phone-status"></p>
-    </div>
+/* ===== HOST ===== */
+const ROUND_SECONDS = 60;
+let canvas, ctx, rafId = null, timerId = null, lastT = 0;
+let G = null;                       // game state
+let aimTarget = { x: 0, y: 0 };     // where the phone points
+let crosshair = { x: 0, y: 0 };     // smoothed crosshair
+let hostSens = 15;
+let particles = [];
 
-    <!-- SCREEN 5: Phone Controller -->
-    <div id="screen-phone-controller" class="screen">
-        <div class="controller-header">
-            <span id="controller-status">Connected ✓</span>
-            <button id="btn-disconnect" class="btn small">Disconnect</button>
-        </div>
-        
-        <div id="motion-permission-container">
-            <p>We need access to your phone's motion sensors to aim.</p>
-            <button id="btn-enable-motion" class="btn secondary">ENABLE MOTION CONTROLS</button>
-        </div>
+function makeCode() {
+  let c = ''; for (let i = 0; i < 4; i++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+  return c;
+}
 
-        <div id="controller-ui" class="hidden">
-            <div class="controls-top">
-                <button id="btn-calibrate" class="btn secondary">CALIBRATE AIM</button>
-                <div class="slider-group">
-                    <label>Sensitivity</label>
-                    <input type="range" id="slider-sensitivity" min="5" max="30" value="15">
-                </div>
-            </div>
-            
-            <button id="btn-shoot" class="btn danger big-btn">SHOOT</button>
-        </div>
-    </div>
+function initHost() {
+  const code = makeCode();
+  $('host-room-code').textContent = code;
+  peer = new Peer('shoot-' + code);
+  peer.on('error', err => {
+    if (err.type === 'unavailable-id') { peer.destroy(); initHost(); }
+    else setHostStatus('Connection error: ' + err.type, 'bad');
+  });
+  peer.on('connection', conn => {
+    dataConn = conn;
+    conn.on('open', () => {
+      setHostStatus('Phone connected', 'ok');
+      $('btn-start-round').classList.remove('hidden');
+    });
+    conn.on('data', onControllerData);
+    conn.on('close', () => {
+      if (dataConn !== conn) return;
+      setHostStatus('Phone disconnected. Reconnect with the same code.', 'bad');
+      if (G && G.active) endGame('Phone disconnected');
+    });
+  });
+}
+function setHostStatus(t, cls) { const e = $('host-status'); e.textContent = t; e.className = 'status ' + (cls || ''); }
 
-    <script>
-        // ==========================================
-        // SHARED STATE & UTILS
-        // ==========================================
-        let peer = null;
-        let dataConn = null;
+function onControllerData(d) {
+  if (d.type === 'aim') {
+    hostSens = d.sens;
+    // degrees across the screen width = 750 / sensitivity
+    const ppd = canvas ? canvas.width / (750 / d.sens) : 0;
+    if (canvas) {
+      aimTarget.x = canvas.width / 2 + d.yaw * ppd;
+      aimTarget.y = canvas.height / 2 - d.pitch * ppd;
+      aimTarget.x = Math.max(0, Math.min(canvas.width, aimTarget.x));
+      aimTarget.y = Math.max(0, Math.min(canvas.height, aimTarget.y));
+    }
+  } else if (d.type === 'shoot') {
+    if (G && G.active) shoot();
+  } else if (d.type === 'recenter') {
+    if (canvas) { aimTarget.x = canvas.width / 2; aimTarget.y = canvas.height / 2; }
+  }
+}
 
-        function showScreen(screenId) {
-            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-            document.getElementById(screenId).classList.add('active');
-        }
+function resizeCanvas() {
+  if (!canvas) return;
+  canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
 
-        // ==========================================
-        // HOST (LAPTOP) LOGIC
-        // ==========================================
-        let hostRoomCode = "";
-        let gameState = { active: false, score: 0, time: 60, hits: 0, misses: 0, targets: [], difficulty: 1 };
-        let canvas, ctx, crosshair = { x: 0, y: 0 }, animationFrameId, gameTimerId;
+function startRound() {
+  initAudio();
+  showScreen('screen-host-game');
+  canvas = $('game-canvas'); ctx = canvas.getContext('2d');
+  resizeCanvas();
+  crosshair = { x: canvas.width / 2, y: canvas.height / 2 };
+  aimTarget = { ...crosshair };
+  particles = [];
+  G = { active: false, score: 0, time: ROUND_SECONDS, hits: 0, shots: 0, streak: 0, best: 0, targets: [], difficulty: 1 };
+  updateHud();
+  runCountdown(3);
+}
 
-        function initHost() {
-            hostRoomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
-            document.getElementById('host-room-code').innerText = hostRoomCode;
+function runCountdown(n) {
+  const ov = $('overlay');
+  ov.classList.remove('hidden');
+  if (n === 0) { ov.classList.add('hidden'); beginPlay(); return; }
+  ov.innerHTML = '<div id="countdown">' + n + '</div><p>Aim and calibrate on your phone now</p>';
+  tone(440, 'sine', 0.15);
+  setTimeout(() => runCountdown(n - 1), 1000);
+}
 
-            peer = new Peer('shoot-' + hostRoomCode);
+function beginPlay() {
+  tone(880, 'sine', 0.3);
+  G.active = true;
+  lastT = performance.now();
+  timerId = setInterval(() => {
+    G.time--; G.difficulty += 0.04;
+    updateHud();
+    if (G.time <= 0) endGame('Time up');
+  }, 1000);
+  rafId = requestAnimationFrame(loop);
+}
 
-            peer.on('open', (id) => console.log('Host Peer ID:', id));
+function spawnTarget() {
+  const r = 18 + Math.random() * 30;
+  const sp = 60 * G.difficulty;
+  G.targets.push({
+    x: r + Math.random() * (canvas.width - 2 * r),
+    y: 90 + r + Math.random() * (canvas.height - 2 * r - 90),
+    r, maxR: r,
+    vx: (Math.random() - 0.5) * 2 * sp, vy: (Math.random() - 0.5) * 2 * sp,
+    life: 3 + Math.random() * 2, age: 0,
+    hue: Math.floor(Math.random() * 360)
+  });
+}
 
-            peer.on('connection', (conn) => {
-                dataConn = conn;
-                document.getElementById('host-status').innerText = "Phone Connected ✓";
-                document.getElementById('host-status').style.color = "#4caf50";
-                document.getElementById('btn-start-round').classList.remove('hidden');
+function loop(now) {
+  if (!G.active) return;
+  const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
 
-                dataConn.on('data', handleControllerData);
-                
-                dataConn.on('close', () => {
-                    document.getElementById('host-status').innerText = "Phone Disconnected!";
-                    document.getElementById('host-status').style.color = "#e63946";
-                });
-            });
+  // smooth crosshair toward the phone's aim
+  const k = 1 - Math.pow(0.001, dt);
+  crosshair.x += (aimTarget.x - crosshair.x) * k;
+  crosshair.y += (aimTarget.y - crosshair.y) * k;
 
-            document.getElementById('btn-start-round').addEventListener('click', startGame);
-        }
+  if (G.targets.length < 4 + Math.floor(G.difficulty * 2) && Math.random() < 1.2 * G.difficulty * dt) spawnTarget();
 
-        function handleControllerData(data) {
-            if (!gameState.active) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let i = G.targets.length - 1; i >= 0; i--) {
+    const t = G.targets[i];
+    t.age += dt; t.x += t.vx * dt; t.y += t.vy * dt;
+    if (t.x < t.r || t.x > canvas.width - t.r) t.vx *= -1;
+    if (t.y < t.r + 80 || t.y > canvas.height - t.r) t.vy *= -1;
+    const left = t.life - t.age;
+    if (left <= 0) { G.targets.splice(i, 1); continue; }
+    if (left < 1) t.r = t.maxR * left;      // shrink away in last second
+    ctx.beginPath(); ctx.arc(t.x, t.y, Math.max(t.r, 0), 0, Math.PI * 2);
+    ctx.fillStyle = 'hsl(' + t.hue + ',85%,58%)'; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(t.x, t.y, t.r * 0.45, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 2; ctx.stroke();
+  }
 
-            if (data.type === 'aim') {
-                let cx = canvas.width / 2;
-                let cy = canvas.height / 2;
-                
-                crosshair.x = cx - (data.x * (canvas.width / 90) * (data.sensitivity / 10));
-                crosshair.y = cy - (data.y * (canvas.height / 90) * (data.sensitivity / 10));
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt; if (p.life <= 0) { particles.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    ctx.globalAlpha = p.life / 0.5; ctx.fillStyle = p.c;
+    ctx.fillRect(p.x, p.y, 4, 4);
+  }
+  ctx.globalAlpha = 1;
 
-                crosshair.x = Math.max(0, Math.min(canvas.width, crosshair.x));
-                crosshair.y = Math.max(0, Math.min(canvas.height, crosshair.y));
-            } 
-            else if (data.type === 'shoot') {
-                processShoot();
-            }
-        }
+  drawCrosshair();
+  rafId = requestAnimationFrame(loop);
+}
 
-        function processShoot() {
-            let hitSomething = false;
-            playTone(300, 'square', 0.1);
+function drawCrosshair() {
+  const { x, y } = crosshair;
+  ctx.strokeStyle = '#3ddc97'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(x, y, 16, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - 28, y); ctx.lineTo(x - 8, y); ctx.moveTo(x + 8, y); ctx.lineTo(x + 28, y);
+  ctx.moveTo(x, y - 28); ctx.lineTo(x, y - 8); ctx.moveTo(x, y + 8); ctx.lineTo(x, y + 28);
+  ctx.stroke();
+}
 
-            for (let i = gameState.targets.length - 1; i >= 0; i--) {
-                let t = gameState.targets[i];
-                let dist = Math.hypot(crosshair.x - t.x, crosshair.y - t.y);
-                
-                if (dist <= t.radius) {
-                    gameState.targets.splice(i, 1);
-                    gameState.score += 10;
-                    gameState.hits++;
-                    hitSomething = true;
-                    playTone(800, 'sine', 0.1);
-                    break; 
-                }
-            }
+function shoot() {
+  G.shots++;
+  tone(300, 'square', 0.08, 0.1);
+  let hit = null, bestD = Infinity;
+  for (const t of G.targets) {
+    const d = Math.hypot(crosshair.x - t.x, crosshair.y - t.y);
+    if (d <= t.r + 6 && d < bestD) { hit = t; bestD = d; }
+  }
+  if (hit) {
+    G.targets.splice(G.targets.indexOf(hit), 1);
+    G.streak++; G.best = Math.max(G.best, G.streak);
+    const mult = Math.min(5, 1 + Math.floor(G.streak / 3));
+    G.score += Math.round(60 - hit.maxR) * mult;       // small targets pay more
+    G.hits++;
+    for (let i = 0; i < 16; i++) {
+      const a = Math.random() * 6.28, s = 80 + Math.random() * 220;
+      particles.push({ x: hit.x, y: hit.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5, c: 'hsl(' + hit.hue + ',90%,65%)' });
+    }
+    tone(800 + mult * 80, 'sine', 0.12);
+    send({ type: 'result', hit: true });
+  } else {
+    G.streak = 0;
+    send({ type: 'result', hit: false });
+  }
+  updateHud();
+  send({ type: 'state', score: G.score });
+}
 
-            if (!hitSomething) gameState.misses++;
-            updateHud();
-            
-            if(dataConn) {
-                dataConn.send({ type: 'gameState', score: gameState.score, hits: gameState.hits, misses: gameState.misses });
-            }
-        }
+function updateHud() {
+  $('ui-score').textContent = G.score;
+  $('ui-time').textContent = G.time;
+  $('ui-mult').textContent = Math.min(5, 1 + Math.floor(G.streak / 3));
+  $('ui-acc').textContent = G.shots ? Math.round(G.hits / G.shots * 100) : 0;
+}
 
-        function startGame() {
-            showScreen('screen-host-game');
-            canvas = document.getElementById('game-canvas');
-            ctx = canvas.getContext('2d');
-            
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-            
-            gameState = { active: true, score: 0, time: 60, hits: 0, misses: 0, targets: [], difficulty: 1 };
-            crosshair = { x: canvas.width / 2, y: canvas.height / 2 };
-            
-            updateHud();
-            
-            gameTimerId = setInterval(() => {
-                gameState.time--;
-                updateHud();
-                gameState.difficulty += 0.05;
+function endGame(reason) {
+  G.active = false;
+  clearInterval(timerId); cancelAnimationFrame(rafId);
+  let hi = 0;
+  try { hi = +localStorage.getItem('ms-best') || 0; if (G.score > hi) { hi = G.score; localStorage.setItem('ms-best', hi); } } catch (e) {}
+  const acc = G.shots ? Math.round(G.hits / G.shots * 100) : 0;
+  const ov = $('overlay');
+  ov.classList.remove('hidden');
+  ov.innerHTML = '<h1>' + reason + '</h1><h2>Score ' + G.score + '</h2>' +
+    '<p>' + G.hits + ' hits, ' + acc + '% accuracy, best streak ' + G.best + '<br>Best score on this device: ' + hi + '</p>' +
+    '<button class="btn primary" id="btn-again">Play again</button>';
+  $('btn-again').onclick = startRound;
+  send({ type: 'over', score: G.score });
+}
 
-                if (gameState.time <= 0) endGame();
-            }, 1000);
+/* ===== PHONE ===== */
+const D2R = Math.PI / 180;
+let sensorOn = false, gotEvent = false, needCalib = true, calib = { yaw: 0, pitch: 0, mode: 'wand' };
+let cur = { yaw: 0, pitch: 0, topZ: 0 }, touchOff = { yaw: 0, pitch: 0 };
+let sens = 15, lastSent = 0, wakeLock = null;
 
-            gameLoop();
-        }
+function initPhone() {
+  $('btn-connect').onclick = connectToHost;
+  $('btn-enable-motion').onclick = requestMotion;
+  $('btn-calibrate').onclick = () => { needCalib = true; touchOff = { yaw: 0, pitch: 0 }; send({ type: 'recenter' }); if (navigator.vibrate) navigator.vibrate([30, 30, 30]); };
+  $('btn-disconnect').onclick = () => location.reload();
+  $('slider-sens').oninput = e => { sens = +e.target.value; };
 
-        function gameLoop() {
-            if (!gameState.active) return;
-            
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const shootBtn = $('btn-shoot');
+  shootBtn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    send({ type: 'shoot' });
+    if (navigator.vibrate) navigator.vibrate(30);
+  });
 
-            if (Math.random() < 0.02 * gameState.difficulty && gameState.targets.length < 10) {
-                gameState.targets.push({
-                    x: Math.random() * canvas.width,
-                    y: Math.random() * canvas.height,
-                    radius: 20 + Math.random() * 30,
-                    vx: (Math.random() - 0.5) * 5 * gameState.difficulty,
-                    vy: (Math.random() - 0.5) * 5 * gameState.difficulty,
-                    color: `hsl(${Math.random() * 360}, 100%, 60%)`
-                });
-            }
+  // touch fallback for devices without usable sensors
+  const pad = $('pad'); let last = null;
+  pad.addEventListener('pointerdown', e => { last = { x: e.clientX, y: e.clientY }; pad.setPointerCapture(e.pointerId); });
+  pad.addEventListener('pointermove', e => {
+    if (!last) return;
+    touchOff.yaw += (e.clientX - last.x) * 0.25;
+    touchOff.pitch -= (e.clientY - last.y) * 0.25;
+    last = { x: e.clientX, y: e.clientY };
+    sendAim(true);
+  });
+  pad.addEventListener('pointerup', () => { last = null; });
+}
 
-            gameState.targets.forEach(t => {
-                t.x += t.vx;
-                t.y += t.vy;
-                
-                if (t.x < 0 || t.x > canvas.width) t.vx *= -1;
-                if (t.y < 0 || t.y > canvas.height) t.vy *= -1;
+function connectToHost() {
+  const code = $('input-room-code').value.trim().toUpperCase();
+  if (code.length !== 4) return setPhoneStatus('Enter the 4-letter code.', 'bad');
+  setPhoneStatus('Connecting...', '');
+  if (peer) peer.destroy();
+  peer = new Peer();
+  peer.on('open', () => {
+    dataConn = peer.connect('shoot-' + code, { reliable: true });
+    const timeout = setTimeout(() => setPhoneStatus('No response. Check the code and that the host page is open.', 'bad'), 8000);
+    dataConn.on('open', () => { clearTimeout(timeout); showScreen('screen-phone-controller'); });
+    dataConn.on('data', onHostData);
+    dataConn.on('close', () => { alert('Host disconnected.'); location.reload(); });
+  });
+  peer.on('error', err => setPhoneStatus(err.type === 'peer-unavailable' ? 'Code not found. Check the code on the host screen.' : 'Error: ' + err.type, 'bad'));
+}
+function setPhoneStatus(t, c) { const e = $('phone-status'); e.textContent = t; e.className = 'status ' + (c || ''); }
 
-                ctx.beginPath();
-                ctx.arc(t.x, t.y, t.radius, 0, Math.PI * 2);
-                ctx.fillStyle = t.color;
-                ctx.fill();
-                ctx.strokeStyle = '#fff';
-                ctx.lineWidth = 2;
-                ctx.stroke();
-            });
+function onHostData(d) {
+  if (d.type === 'state') $('ctl-score').textContent = 'Score ' + d.score;
+  else if (d.type === 'result' && d.hit && navigator.vibrate) navigator.vibrate([20, 30, 20]);
+  else if (d.type === 'over') { $('ctl-msg').textContent = 'Round over. Final score ' + d.score; }
+}
 
-            ctx.beginPath();
-            ctx.arc(crosshair.x, crosshair.y, 15, 0, Math.PI * 2);
-            ctx.strokeStyle = '#0f0';
-            ctx.lineWidth = 3;
-            ctx.stroke();
-            ctx.moveTo(crosshair.x - 25, crosshair.y); ctx.lineTo(crosshair.x + 25, crosshair.y);
-            ctx.moveTo(crosshair.x, crosshair.y - 25); ctx.lineTo(crosshair.x, crosshair.y + 25);
-            ctx.stroke();
+function requestMotion() {
+  const DOE = window.DeviceOrientationEvent;
+  if (!DOE) return motionMsg('This browser has no motion sensors.', true);
+  if (!window.isSecureContext) motionMsg('Warning: this page is not HTTPS, so the browser may block sensors.', true);
+  if (typeof DOE.requestPermission === 'function') {
+    DOE.requestPermission().then(s => {
+      if (s === 'granted') startSensors();
+      else motionMsg('Permission denied. Reload and allow Motion & Orientation access.', true);
+    }).catch(err => motionMsg('Permission error: ' + err.message, true));
+  } else startSensors();
+}
+function motionMsg(t, bad) { const e = $('motion-status'); e.textContent = t; e.className = 'status ' + (bad ? 'bad' : ''); }
 
-            animationFrameId = requestAnimationFrame(gameLoop);
-        }
+function startSensors() {
+  $('motion-gate').classList.remove('active');
+  $('motion-gate').classList.add('hidden');
+  $('ctl-ui').classList.remove('hidden');
+  sensorOn = true; needCalib = true;
+  window.addEventListener('deviceorientation', onOrientation);
+  if (navigator.wakeLock) navigator.wakeLock.request('screen').then(l => wakeLock = l).catch(() => {});
+  // if no sensor data arrives, offer touch aiming
+  setTimeout(() => {
+    if (!gotEvent) { $('pad').classList.remove('hidden'); $('ctl-msg').textContent = 'No sensor data (needs HTTPS). Use the touch pad to aim.'; $('ctl-msg').className = 'status bad'; }
+  }, 1500);
+}
 
-        function updateHud() {
-            document.getElementById('ui-score').innerText = gameState.score;
-            document.getElementById('ui-time').innerText = gameState.time;
-            document.getElementById('ui-hits').innerText = gameState.hits;
-            document.getElementById('ui-misses').innerText = gameState.misses;
-        }
+// Convert device orientation to a pointing direction (yaw/pitch in degrees).
+// Using the full rotation matrix avoids the gimbal problems of raw alpha/beta,
+// and works whether the phone is held flat like a remote or upright like a camera.
+function onOrientation(e) {
+  if (e.alpha === null || e.beta === null || e.gamma === null) return;
+  gotEvent = true;
+  const a = e.alpha * D2R, b = e.beta * D2R, g = e.gamma * D2R;
+  const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cg = Math.cos(g), sg = Math.sin(g);
+  // device top edge in world frame (x=east, y=north, z=up)
+  const top = [-sa * cb, ca * cb, sb];
+  // device back (camera direction) in world frame
+  const back = [-(ca * sg + sa * sb * cg), -(sa * sg - ca * sb * cg), -(cb * cg)];
+  cur.topZ = top[2];
+  cur.top = top; cur.back = back;
 
-        function endGame() {
-            gameState.active = false;
-            clearInterval(gameTimerId);
-            cancelAnimationFrame(animationFrameId);
-            
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            ctx.fillStyle = '#fff';
-            ctx.font = '60px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 50);
-            ctx.font = '30px Arial';
-            ctx.fillText(`Final Score: ${gameState.score}`, canvas.width / 2, canvas.height / 2 + 20);
-            ctx.fillText('Refresh page to play again.', canvas.width / 2, canvas.height / 2 + 70);
-        }
+  if (needCalib) {
+    // steep phone (top edge points up) => aim with the back; otherwise aim with the top edge
+    calib.mode = Math.abs(top[2]) > 0.7 ? 'camera' : 'wand';
+    const v = calib.mode === 'camera' ? back : top;
+    calib.yaw = Math.atan2(v[0], v[1]) / D2R;
+    calib.pitch = Math.asin(Math.max(-1, Math.min(1, v[2]))) / D2R;
+    needCalib = false;
+    $('ctl-msg').textContent = 'Aim locked (' + (calib.mode === 'camera' ? 'upright' : 'flat') + ' hold). Recalibrate any time.';
+    $('ctl-msg').className = 'status ok';
+  }
+  sendAim(false);
+}
 
-        let audioCtx = null;
-        function playTone(freq, type, duration) {
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            let osc = audioCtx.createOscillator();
-            let gain = audioCtx.createGain();
-            osc.type = type;
-            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
-            osc.stop(audioCtx.currentTime + duration);
-        }
+function sendAim(force) {
+  const now = performance.now();
+  if (!force && now - lastSent < 16) return;
+  lastSent = now;
+  let yaw = 0, pitch = 0;
+  if (cur.top) {
+    const v = calib.mode === 'camera' ? cur.back : cur.top;
+    const y = Math.atan2(v[0], v[1]) / D2R;
+    const p = Math.asin(Math.max(-1, Math.min(1, v[2]))) / D2R;
+    yaw = shortDiff(y, calib.yaw);
+    pitch = p - calib.pitch;
+  }
+  send({ type: 'aim', yaw: yaw + touchOff.yaw, pitch: pitch + touchOff.pitch, sens });
+}
+function shortDiff(a, b) { let d = a - b; while (d < -180) d += 360; while (d > 180) d -= 360; return d; }
 
-        // ==========================================
-        // PHONE (CONTROLLER) LOGIC
-        // ==========================================
-        let calibAlpha = 0, calibBeta = 0, isCalibrated = false, sensitivity = 15;
-
-        function initPhone() {
-            document.getElementById('btn-connect').addEventListener('click', connectToHost);
-            document.getElementById('btn-enable-motion').addEventListener('click', requestMotionPermissions);
-            document.getElementById('btn-calibrate').addEventListener('click', calibrateAim);
-            document.getElementById('btn-disconnect').addEventListener('click', () => window.location.reload());
-            
-            const btnShoot = document.getElementById('btn-shoot');
-            btnShoot.addEventListener('pointerdown', (e) => {
-                e.preventDefault(); 
-                if (dataConn && dataConn.open) {
-                    dataConn.send({ type: 'shoot', timestamp: Date.now() });
-                    if (navigator.vibrate) navigator.vibrate(50);
-                }
-            });
-
-            document.getElementById('slider-sensitivity').addEventListener('input', (e) => {
-                sensitivity = e.target.value;
-            });
-        }
-
-        function connectToHost() {
-            const code = document.getElementById('input-room-code').value.toUpperCase();
-            if (code.length !== 4) return alert('Enter a 4-letter code.');
-
-            document.getElementById('phone-status').innerText = "Connecting...";
-            
-            peer = new Peer();
-            peer.on('open', () => {
-                dataConn = peer.connect('shoot-' + code);
-                
-                dataConn.on('open', () => {
-                    showScreen('screen-phone-controller');
-                });
-
-                dataConn.on('close', () => {
-                    alert('Host disconnected.');
-                    window.location.reload();
-                });
-            });
-            
-            peer.on('error', (err) => {
-                document.getElementById('phone-status').innerText = "Error: " + err.type;
-            });
-        }
-
-        function requestMotionPermissions() {
-            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission()
-                    .then(permissionState => {
-                        if (permissionState === 'granted') startSensorListeners();
-                        else alert('Permission denied. Cannot play.');
-                    })
-                    .catch(console.error);
-            } else {
-                startSensorListeners();
-            }
-        }
-
-        function startSensorListeners() {
-            document.getElementById('motion-permission-container').classList.add('hidden');
-            document.getElementById('controller-ui').classList.remove('hidden');
-
-            window.addEventListener('deviceorientation', handleOrientation);
-            isCalibrated = false; 
-        }
-
-        function calibrateAim() {
-            isCalibrated = false; 
-            if (navigator.vibrate) navigator.vibrate([30, 30, 30]);
-        }
-
-        function getShortestAngleDiff(a, b) {
-            let diff = a - b;
-            while (diff < -180) diff += 360;
-            while (diff > 180) diff -= 360;
-            return diff;
-        }
-
-        function handleOrientation(event) {
-            if (event.alpha === null || event.beta === null) return;
-
-            if (!isCalibrated) {
-                calibAlpha = event.alpha;
-                calibBeta = event.beta;
-                isCalibrated = true;
-                return;
-            }
-
-            if (dataConn && dataConn.open) {
-                let deltaAlpha = getShortestAngleDiff(event.alpha, calibAlpha);
-                let deltaBeta = event.beta - calibBeta;
-
-                dataConn.send({
-                    type: 'aim',
-                    x: deltaAlpha,
-                    y: deltaBeta,
-                    sensitivity: sensitivity
-                });
-            }
-        }
-
-        // ==========================================
-        // INITIALIZATION
-        // ==========================================
-        document.getElementById('btn-start-host').addEventListener('click', () => {
-            showScreen('screen-host-lobby');
-            initHost();
-        });
-
-        document.getElementById('btn-start-phone').addEventListener('click', () => {
-            showScreen('screen-phone-join');
-            initPhone();
-        });
-    </script>
+/* ===== Boot ===== */
+$('btn-start-host').onclick = () => { showScreen('screen-host-lobby'); initAudio(); initHost(); };
+$('btn-start-phone').onclick = () => { showScreen('screen-phone-join'); initPhone(); };
+$('btn-start-round').onclick = startRound;
+</script>
 </body>
 </html>
