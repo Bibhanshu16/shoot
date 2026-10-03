@@ -92,6 +92,7 @@ input[type=range] { width:200px; accent-color:var(--amber); }
   </div>
   <div id="ctl-ui" class="hidden">
     <p class="status" id="ctl-msg">Point at the screen, then press Calibrate.</p>
+    <p class="status" id="dbg" style="font-size:.75rem;max-width:none">sensor: starting...</p>
     <div class="row">
       <button id="btn-calibrate" class="btn primary">Calibrate aim</button>
       <label class="row">Sensitivity <input type="range" id="slider-sens" min="5" max="30" value="15"></label>
@@ -342,6 +343,26 @@ const D2R = Math.PI / 180;
 let sensorOn = false, gotEvent = false, needCalib = true, calib = { yaw: 0, pitch: 0, mode: 'wand' };
 let cur = { yaw: 0, pitch: 0, topZ: 0 }, touchOff = { yaw: 0, pitch: 0 };
 let sens = 15, lastSent = 0, wakeLock = null;
+let src = 'orient', events = 0, lastDbg = 0;
+function dbg(t) { $('dbg').textContent = t; }
+
+// Fallback for Android Chrome: Generic Sensor API (gives a quaternion + explicit errors)
+function startGenericSensor() {
+  const Cls = window.RelativeOrientationSensor || window.AbsoluteOrientationSensor;
+  if (!Cls) { dbg('sensor: Generic Sensor API not supported'); return; }
+  try {
+    const s = new Cls({ frequency: 60, referenceFrame: 'device' });
+    s.addEventListener('reading', () => {
+      const [x, y, z, w] = s.quaternion;
+      const top = [2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w)];
+      const back = [-2 * (x * z + y * w), -2 * (y * z - x * w), -(1 - 2 * (x * x + y * y))];
+      src = 'generic';
+      applyVectors(top, back);
+    });
+    s.addEventListener('error', ev => dbg('sensor error: ' + ev.error.name + ' (' + ev.error.message + ')'));
+    s.start();
+  } catch (err) { dbg('sensor error: ' + err.name + ' ' + err.message); }
+}
 
 function initPhone() {
   $('btn-connect').onclick = connectToHost;
@@ -413,10 +434,18 @@ function startSensors() {
   sensorOn = true; needCalib = true;
   window.addEventListener('deviceorientation', onOrientation);
   if (navigator.wakeLock) navigator.wakeLock.request('screen').then(l => wakeLock = l).catch(() => {});
-  // if no sensor data arrives, offer touch aiming
+  window.addEventListener('deviceorientationabsolute', onOrientation);
+  dbg('sensor: waiting for data...');
+  // nothing yet? try the Generic Sensor API
+  setTimeout(() => { if (events === 0) startGenericSensor(); }, 1200);
+  // still nothing? show how to fix it and offer touch aiming
   setTimeout(() => {
-    if (!gotEvent) { $('pad').classList.remove('hidden'); $('ctl-msg').textContent = 'No sensor data (needs HTTPS). Use the touch pad to aim.'; $('ctl-msg').className = 'status bad'; }
-  }, 1500);
+    if (events === 0) {
+      $('pad').classList.remove('hidden');
+      $('ctl-msg').textContent = 'No motion data. In Chrome: menu (three dots) > Settings > Site settings > Motion sensors > Allow, then reload. Use the touch pad meanwhile.';
+      $('ctl-msg').className = 'status bad';
+    }
+  }, 3500);
 }
 
 // Convert device orientation to a pointing direction (yaw/pitch in degrees).
@@ -431,7 +460,11 @@ function onOrientation(e) {
   const top = [-sa * cb, ca * cb, sb];
   // device back (camera direction) in world frame
   const back = [-(ca * sg + sa * sb * cg), -(sa * sg - ca * sb * cg), -(cb * cg)];
-  cur.topZ = top[2];
+  if (src === 'orient') applyVectors(top, back);
+}
+
+function applyVectors(top, back) {
+  gotEvent = true; events++;
   cur.top = top; cur.back = back;
 
   if (needCalib) {
@@ -459,6 +492,7 @@ function sendAim(force) {
     yaw = shortDiff(y, calib.yaw);
     pitch = p - calib.pitch;
   }
+  if (now - lastDbg > 250) { lastDbg = now; dbg('sensor: ' + src + ' | events ' + events + ' | yaw ' + yaw.toFixed(0) + ' pitch ' + pitch.toFixed(0)); }
   send({ type: 'aim', yaw: yaw + touchOff.yaw, pitch: pitch + touchOff.pitch, sens });
 }
 function shortDiff(a, b) { let d = a - b; while (d < -180) d += 360; while (d > 180) d -= 360; return d; }
