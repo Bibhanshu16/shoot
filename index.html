@@ -43,6 +43,12 @@ input[type=range] { width:200px; accent-color:var(--amber); }
 #btn-shoot:active { transform:translateY(8px); box-shadow:0 2px 0 #a52f4d; }
 #pad { width:92%; height:22vh; border:2px dashed var(--dim); border-radius:16px; display:flex; align-items:center; justify-content:center; color:var(--dim); touch-action:none; }
 #ctl-score { font-size:1.2rem; font-weight:800; color:var(--amber); font-variant-numeric:tabular-nums; }
+.players { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+.pchip { padding:8px 16px; border:2px solid; border-radius:999px; font-weight:800; }
+.btn.sel { outline:3px solid var(--amber); }
+#hud-players { display:flex; gap:8px; flex-wrap:wrap; }
+.res { border-collapse:collapse; font-weight:700; font-size:1.2rem; }
+.res td { padding:6px 16px; }
 </style>
 </head>
 <body>
@@ -55,18 +61,21 @@ input[type=range] { width:200px; accent-color:var(--amber); }
 </div>
 
 <div id="screen-host-lobby" class="screen">
-  <h2>Enter this code on your phone</h2>
+  <h2>Enter this code on your phones</h2>
   <div class="code" id="host-room-code">----</div>
-  <p class="status" id="host-status">Waiting for phone...</p>
+  <div class="players" id="player-list"></div>
+  <p class="status" id="host-status">Waiting for phones... (up to 4)</p>
+  <div class="row">
+    <button class="btn sel" data-mode="versus">Competitive</button>
+    <button class="btn" data-mode="coop">Co-op</button>
+  </div>
   <button id="btn-start-round" class="btn primary hidden">Start round</button>
 </div>
 
 <div id="screen-host-game" class="screen">
   <canvas id="game-canvas"></canvas>
   <div id="hud">
-    <div class="hud"><small>Score</small><span id="ui-score">0</span></div>
-    <div class="hud"><small>Streak</small>x<span id="ui-mult">1</span></div>
-    <div class="hud"><small>Accuracy</small><span id="ui-acc">0</span>%</div>
+    <div id="hud-players"></div>
     <div class="hud"><small>Time</small><span id="ui-time">60</span></div>
   </div>
   <div id="overlay" class="hidden"></div>
@@ -130,14 +139,20 @@ function tone(freq, type, dur, vol = 0.15) {
   o.start(t); o.stop(t + dur);
 }
 
-/* ===== HOST ===== */
-const ROUND_SECONDS = 60;
+/* ===== HOST (multiplayer, up to 4 phones) ===== */
+const ROUND_SECONDS = 60, MAX_PLAYERS = 4;
+const PCOL = ['#3ddc97', '#ffb703', '#4cc9f0', '#f72585'];
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 let canvas, ctx, rafId = null, timerId = null, lastT = 0;
-let G = null;                       // game state
-let aimTarget = { x: 0, y: 0 };     // where the phone points
-let crosshair = { x: 0, y: 0 };     // smoothed crosshair
-let hostSens = 15, hostVel = null;
-let particles = [];
+let G = null, particles = [], roundMode = 'versus';
+const players = Array.from({ length: MAX_PLAYERS }, (_, i) => ({
+  slot: i, conn: null, color: PCOL[i], name: 'P' + (i + 1), played: false, sens: 15, vel: null,
+  aim: { x: 0, y: 0 }, cross: { x: 0, y: 0 }, score: 0, hits: 0, shots: 0, streak: 0, best: 0
+}));
+const online = () => players.filter(p => p.conn);
+const mult = p => Math.min(5, 1 + Math.floor(p.streak / 3));
+const teamScore = () => players.filter(p => p.played).reduce((a, p) => a + p.score, 0);
+const toPlayer = (p, msg) => { if (p.conn && p.conn.open) p.conn.send(msg); };
 
 function makeCode() {
   let c = ''; for (let i = 0; i < 4; i++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
@@ -153,38 +168,55 @@ function initHost() {
     else setHostStatus('Connection error: ' + err.type, 'bad');
   });
   peer.on('connection', conn => {
-    dataConn = conn;
-    conn.on('open', () => {
-      setHostStatus('Phone connected', 'ok');
-      $('btn-start-round').classList.remove('hidden');
-    });
-    conn.on('data', onControllerData);
+    const p = players.find(x => !x.conn);
+    if (!p || (G && G.active)) {
+      const reason = p ? 'A round is in progress. Join between rounds.' : 'Game is full (4 players).';
+      conn.on('open', () => { conn.send({ type: 'rejected', reason }); setTimeout(() => conn.close(), 400); });
+      return;
+    }
+    p.conn = conn;
+    conn.on('open', () => { conn.send({ type: 'welcome', slot: p.slot, name: p.name, color: p.color }); renderLobby(); });
+    conn.on('data', d => onControllerData(p, d));
     conn.on('close', () => {
-      if (dataConn !== conn) return;
-      setHostStatus('Phone disconnected. Reconnect with the same code.', 'bad');
-      if (G && G.active) endGame('Phone disconnected');
+      if (p.conn !== conn) return;
+      p.conn = null; p.vel = null; renderLobby();
+      if (G && G.active && !online().length) endGame('All players left');
     });
   });
+  renderLobby();
 }
 function setHostStatus(t, cls) { const e = $('host-status'); e.textContent = t; e.className = 'status ' + (cls || ''); }
 
-function onControllerData(d) {
+function renderLobby() {
+  $('player-list').innerHTML = players.map(p =>
+    '<div class="pchip" style="border-color:' + p.color + ';color:' + p.color + ';opacity:' + (p.conn ? 1 : 0.3) + '">' +
+    p.name + (p.conn ? ' ready' : ' empty') + '</div>').join('');
+  const n = online().length;
+  setHostStatus(n ? n + ' of ' + MAX_PLAYERS + ' players connected' : 'Waiting for phones... (up to 4)', n ? 'ok' : '');
+  $('btn-start-round').classList.toggle('hidden', n === 0);
+}
+
+// mode buttons (lobby and end screen share this handler)
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-mode]');
+  if (!b) return;
+  roundMode = b.dataset.mode;
+  document.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('sel', x.dataset.mode === roundMode));
+});
+
+function onControllerData(p, d) {
   if (d.type === 'aim') {
-    hostSens = d.sens;
-    if (d.mode === 'vel') { hostVel = { x: d.vx, y: d.vy, t: performance.now() }; return; }
-    hostVel = null;
-    // degrees across the screen width = 750 / sensitivity
-    const ppd = canvas ? canvas.width / (750 / d.sens) : 0;
-    if (canvas) {
-      aimTarget.x = canvas.width / 2 + d.yaw * ppd;
-      aimTarget.y = canvas.height / 2 - d.pitch * ppd;
-      aimTarget.x = Math.max(0, Math.min(canvas.width, aimTarget.x));
-      aimTarget.y = Math.max(0, Math.min(canvas.height, aimTarget.y));
-    }
+    p.sens = d.sens;
+    if (d.mode === 'vel') { p.vel = { x: d.vx, y: d.vy, t: performance.now() }; return; }
+    p.vel = null;
+    if (!canvas) return;
+    const ppd = canvas.width / (750 / d.sens);   // degrees across the screen width = 750 / sensitivity
+    p.aim.x = clamp(canvas.width / 2 + d.yaw * ppd, 0, canvas.width);
+    p.aim.y = clamp(canvas.height / 2 - d.pitch * ppd, 0, canvas.height);
   } else if (d.type === 'shoot') {
-    if (G && G.active) shoot();
+    if (G && G.active) shoot(p);
   } else if (d.type === 'recenter') {
-    if (canvas) { aimTarget.x = canvas.width / 2; aimTarget.y = canvas.height / 2; }
+    if (canvas) { p.aim.x = canvas.width / 2; p.aim.y = canvas.height / 2; }
   }
 }
 
@@ -195,14 +227,20 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 
 function startRound() {
+  if (!online().length) return;
   initAudio();
   showScreen('screen-host-game');
   canvas = $('game-canvas'); ctx = canvas.getContext('2d');
   resizeCanvas();
-  crosshair = { x: canvas.width / 2, y: canvas.height / 2 };
-  aimTarget = { ...crosshair };
   particles = [];
-  G = { active: false, score: 0, time: ROUND_SECONDS, hits: 0, shots: 0, streak: 0, best: 0, targets: [], difficulty: 1 };
+  players.forEach(p => {
+    p.played = !!p.conn; p.vel = null;
+    p.score = p.hits = p.shots = p.streak = p.best = 0;
+    p.aim = { x: canvas.width / 2, y: canvas.height / 2 };
+    p.cross = { ...p.aim };
+    toPlayer(p, { type: 'state', score: 0, label: roundMode === 'coop' ? 'Team' : 'Score' });
+  });
+  G = { active: false, time: ROUND_SECONDS, targets: [], difficulty: 1 };
   updateHud();
   runCountdown(3);
 }
@@ -211,7 +249,7 @@ function runCountdown(n) {
   const ov = $('overlay');
   ov.classList.remove('hidden');
   if (n === 0) { ov.classList.add('hidden'); beginPlay(); return; }
-  ov.innerHTML = '<div id="countdown">' + n + '</div><p>Aim and calibrate on your phone now</p>';
+  ov.innerHTML = '<div id="countdown">' + n + '</div><p>' + (roundMode === 'coop' ? 'Co-op: shared team score' : 'Competitive: first hit scores') + '. Calibrate your aim now.</p>';
   tone(440, 'sine', 0.15);
   setTimeout(() => runCountdown(n - 1), 1000);
 }
@@ -244,17 +282,20 @@ function spawnTarget() {
 function loop(now) {
   if (!G.active) return;
   const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+  const act = players.filter(p => p.played && p.conn);
 
-  // smooth crosshair toward the phone's aim
-  if (hostVel && performance.now() - hostVel.t < 250) {      // joystick mode: phone sends speed, host moves the aim
-    aimTarget.x = Math.max(0, Math.min(canvas.width, aimTarget.x + hostVel.x * canvas.width * dt));
-    aimTarget.y = Math.max(0, Math.min(canvas.height, aimTarget.y - hostVel.y * canvas.width * dt));
-  }
   const k = 1 - Math.exp(-dt / 0.035);
-  crosshair.x += (aimTarget.x - crosshair.x) * k;
-  crosshair.y += (aimTarget.y - crosshair.y) * k;
+  for (const p of act) {
+    if (p.vel && performance.now() - p.vel.t < 250) {   // joystick mode: phone sends speed
+      p.aim.x = clamp(p.aim.x + p.vel.x * canvas.width * dt, 0, canvas.width);
+      p.aim.y = clamp(p.aim.y - p.vel.y * canvas.width * dt, 0, canvas.height);
+    }
+    p.cross.x += (p.aim.x - p.cross.x) * k;
+    p.cross.y += (p.aim.y - p.cross.y) * k;
+  }
 
-  if (G.targets.length < 4 + Math.floor(G.difficulty * 2) && Math.random() < 1.2 * G.difficulty * dt) spawnTarget();
+  const want = 4 + Math.floor(G.difficulty * 2) + (act.length - 1) * 2;
+  if (G.targets.length < want && Math.random() < 1.2 * G.difficulty * Math.max(1, act.length) * dt) spawnTarget();
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   for (let i = G.targets.length - 1; i >= 0; i--) {
@@ -273,76 +314,96 @@ function loop(now) {
   }
 
   for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
-    p.life -= dt; if (p.life <= 0) { particles.splice(i, 1); continue; }
-    p.x += p.vx * dt; p.y += p.vy * dt;
-    ctx.globalAlpha = p.life / 0.5; ctx.fillStyle = p.c;
-    ctx.fillRect(p.x, p.y, 4, 4);
+    const q = particles[i];
+    q.life -= dt; if (q.life <= 0) { particles.splice(i, 1); continue; }
+    q.x += q.vx * dt; q.y += q.vy * dt;
+    ctx.globalAlpha = q.life / 0.5; ctx.fillStyle = q.c;
+    ctx.fillRect(q.x, q.y, 4, 4);
   }
   ctx.globalAlpha = 1;
 
-  drawCrosshair();
+  act.forEach(drawCrosshair);
   rafId = requestAnimationFrame(loop);
 }
 
-function drawCrosshair() {
-  const { x, y } = crosshair;
-  ctx.strokeStyle = '#3ddc97'; ctx.lineWidth = 3;
+function drawCrosshair(p) {
+  const { x, y } = p.cross;
+  ctx.strokeStyle = p.color; ctx.lineWidth = 3;
   ctx.beginPath(); ctx.arc(x, y, 16, 0, Math.PI * 2); ctx.stroke();
   ctx.beginPath();
   ctx.moveTo(x - 28, y); ctx.lineTo(x - 8, y); ctx.moveTo(x + 8, y); ctx.lineTo(x + 28, y);
   ctx.moveTo(x, y - 28); ctx.lineTo(x, y - 8); ctx.moveTo(x, y + 8); ctx.lineTo(x, y + 28);
   ctx.stroke();
+  ctx.fillStyle = p.color; ctx.font = 'bold 14px system-ui, sans-serif';
+  ctx.fillText(p.name, x + 20, y - 20);
 }
 
-function shoot() {
-  G.shots++;
-  tone(300, 'square', 0.08, 0.1);
+function shoot(p) {
+  p.shots++;
+  tone(300 + p.slot * 70, 'square', 0.08, 0.08);
   let hit = null, bestD = Infinity;
   for (const t of G.targets) {
-    const d = Math.hypot(crosshair.x - t.x, crosshair.y - t.y);
+    const d = Math.hypot(p.cross.x - t.x, p.cross.y - t.y);
     if (d <= t.r + 6 && d < bestD) { hit = t; bestD = d; }
   }
   if (hit) {
-    G.targets.splice(G.targets.indexOf(hit), 1);
-    G.streak++; G.best = Math.max(G.best, G.streak);
-    const mult = Math.min(5, 1 + Math.floor(G.streak / 3));
-    G.score += Math.round(60 - hit.maxR) * mult;       // small targets pay more
-    G.hits++;
+    G.targets.splice(G.targets.indexOf(hit), 1);   // first shot to land takes the target
+    p.streak++; p.best = Math.max(p.best, p.streak);
+    p.score += Math.round(60 - hit.maxR) * mult(p);   // small targets pay more
+    p.hits++;
     for (let i = 0; i < 16; i++) {
-      const a = Math.random() * 6.28, s = 80 + Math.random() * 220;
-      particles.push({ x: hit.x, y: hit.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5, c: 'hsl(' + hit.hue + ',90%,65%)' });
+      const a = Math.random() * 6.28, sp = 80 + Math.random() * 220;
+      particles.push({ x: hit.x, y: hit.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.5, c: i % 2 ? p.color : 'hsl(' + hit.hue + ',90%,65%)' });
     }
-    tone(800 + mult * 80, 'sine', 0.12);
-    send({ type: 'result', hit: true });
+    tone(800 + mult(p) * 80, 'sine', 0.12);
+    toPlayer(p, { type: 'result', hit: true });
   } else {
-    G.streak = 0;
-    send({ type: 'result', hit: false });
+    p.streak = 0;
+    toPlayer(p, { type: 'result', hit: false });
   }
   updateHud();
-  send({ type: 'state', score: G.score });
+  const label = roundMode === 'coop' ? 'Team' : 'Score', total = teamScore();
+  online().forEach(q => toPlayer(q, { type: 'state', score: roundMode === 'coop' ? total : q.score, label }));
 }
 
 function updateHud() {
-  $('ui-score').textContent = G.score;
   $('ui-time').textContent = G.time;
-  $('ui-mult').textContent = Math.min(5, 1 + Math.floor(G.streak / 3));
-  $('ui-acc').textContent = G.shots ? Math.round(G.hits / G.shots * 100) : 0;
+  let h = '';
+  if (roundMode === 'coop') h += '<div class="hud"><small>TEAM</small>' + teamScore() + '</div>';
+  h += players.filter(p => p.played).map(p =>
+    '<div class="hud" style="border-left:6px solid ' + p.color + ';opacity:' + (p.conn ? 1 : 0.4) + '"><small>' + p.name + '</small>' +
+    p.score + (mult(p) > 1 ? ' <small>x' + mult(p) + '</small>' : '') + '</div>').join('');
+  $('hud-players').innerHTML = h;
 }
 
 function endGame(reason) {
   G.active = false;
   clearInterval(timerId); cancelAnimationFrame(rafId);
+  const act = players.filter(p => p.played).sort((a, b) => b.score - a.score);
+  const team = teamScore();
+  let title;
+  if (reason !== 'Time up') title = reason;
+  else if (roundMode === 'coop') title = 'Team score ' + team;
+  else if (act.length > 1 && act[0].score === act[1].score) title = 'Draw!';
+  else title = act.length > 1 ? act[0].name + ' wins!' : act[0].name + ' scored ' + act[0].score;
+
+  const mark = roundMode === 'coop' ? team : (act[0] ? act[0].score : 0);
   let hi = 0;
-  try { hi = +localStorage.getItem('ms-best') || 0; if (G.score > hi) { hi = G.score; localStorage.setItem('ms-best', hi); } } catch (e) {}
-  const acc = G.shots ? Math.round(G.hits / G.shots * 100) : 0;
+  try { hi = +localStorage.getItem('ms-best-' + roundMode) || 0; if (mark > hi) { hi = mark; localStorage.setItem('ms-best-' + roundMode, hi); } } catch (e) {}
+
+  const rows = act.map(p => {
+    const acc = p.shots ? Math.round(p.hits / p.shots * 100) : 0;
+    return '<tr style="color:' + p.color + '"><td>' + p.name + '</td><td>' + p.score + '</td><td>' + p.hits + ' hits</td><td>' + acc + '%</td><td>streak ' + p.best + '</td></tr>';
+  }).join('');
+  const sel = m => (roundMode === m ? ' sel' : '');
   const ov = $('overlay');
   ov.classList.remove('hidden');
-  ov.innerHTML = '<h1>' + reason + '</h1><h2>Score ' + G.score + '</h2>' +
-    '<p>' + G.hits + ' hits, ' + acc + '% accuracy, best streak ' + G.best + '<br>Best score on this device: ' + hi + '</p>' +
+  ov.innerHTML = '<h1>' + title + '</h1><table class="res">' + rows + '</table>' +
+    '<p>Best ' + (roundMode === 'coop' ? 'team' : 'individual') + ' score on this device: ' + hi + '</p>' +
+    '<div class="row"><button class="btn' + sel('versus') + '" data-mode="versus">Competitive</button><button class="btn' + sel('coop') + '" data-mode="coop">Co-op</button></div>' +
     '<button class="btn primary" id="btn-again">Play again</button>';
   $('btn-again').onclick = startRound;
-  send({ type: 'over', score: G.score });
+  online().forEach(q => toPlayer(q, { type: 'over', text: title }));
 }
 
 /* ===== PHONE ===== */
@@ -507,10 +568,21 @@ function connectToHost() {
 }
 function setPhoneStatus(t, c) { const e = $('phone-status'); e.textContent = t; e.className = 'status ' + (c || ''); }
 
+let myName = '';
 function onHostData(d) {
-  if (d.type === 'state') $('ctl-score').textContent = 'Score ' + d.score;
-  else if (d.type === 'result' && d.hit && navigator.vibrate) navigator.vibrate([20, 30, 20]);
-  else if (d.type === 'over') { $('ctl-msg').textContent = 'Round over. Final score ' + d.score; }
+  if (d.type === 'welcome') {
+    myName = d.name; $('ctl-score').style.color = d.color;
+    $('ctl-score').textContent = myName + ' | Score 0';
+  } else if (d.type === 'rejected') {
+    alert(d.reason); location.reload();
+  } else if (d.type === 'state') {
+    $('ctl-score').textContent = myName + ' | ' + (d.label || 'Score') + ' ' + d.score;
+  } else if (d.type === 'result') {
+    if (navigator.vibrate) navigator.vibrate(d.hit ? [20, 30, 20] : 15);
+  } else if (d.type === 'over') {
+    $('ctl-msg').textContent = 'Round over: ' + d.text;
+    $('ctl-msg').className = 'status';
+  }
 }
 
 function requestMotion() {
