@@ -346,12 +346,14 @@ let sens = 15, lastSent = 0, wakeLock = null;
 let src = 'orient', events = 0, lastDbg = 0;
 function dbg(t) { $('dbg').textContent = t; }
 
-// Fallback for Android Chrome: Generic Sensor API (gives a quaternion + explicit errors)
-function startGenericSensor() {
-  const Cls = window.RelativeOrientationSensor || window.AbsoluteOrientationSensor;
-  if (!Cls) { dbg('sensor: Generic Sensor API not supported'); return; }
+// Fallback chain: Relative sensor (gyro) -> Absolute sensor (accel+compass) -> tilt mode (accelerometer only)
+function startGenericSensor(names) {
+  const name = names.find(n => window[n]);
+  if (!name) { startTilt(); return; }
+  const rest = names.slice(names.indexOf(name) + 1);
+  const next = why => { dbg(name + ': ' + why + ' - trying next method...'); startGenericSensor(rest); };
   try {
-    const s = new Cls({ frequency: 60, referenceFrame: 'device' });
+    const s = new window[name]({ frequency: 60, referenceFrame: 'device' });
     s.addEventListener('reading', () => {
       const [x, y, z, w] = s.quaternion;
       const top = [2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w)];
@@ -359,9 +361,37 @@ function startGenericSensor() {
       src = 'generic';
       applyVectors(top, back);
     });
-    s.addEventListener('error', ev => dbg('sensor error: ' + ev.error.name + ' (' + ev.error.message + ')'));
+    s.addEventListener('error', ev => { if (events === 0) next(ev.error.name); });
     s.start();
-  } catch (err) { dbg('sensor error: ' + err.name + ' ' + err.message); }
+  } catch (err) { next(err.name); }
+}
+
+// Tilt mode: uses only the accelerometer (no gyroscope needed). Tilt the phone to aim.
+let tiltG = null;
+function startTilt() {
+  if (src === 'tilt' || events > 0) return;
+  src = 'tilt'; needCalib = true;
+  window.addEventListener('devicemotion', onMotion);
+  dbg('sensor: tilt mode, waiting for accelerometer...');
+}
+function onMotion(e) {
+  if (src !== 'tilt') return;
+  const a = e.accelerationIncludingGravity;
+  if (!a || a.x === null || a.y === null || a.z === null) return;
+  const k = 0.25;   // low-pass filter
+  tiltG = tiltG ? [tiltG[0] + (a.x - tiltG[0]) * k, tiltG[1] + (a.y - tiltG[1]) * k, tiltG[2] + (a.z - tiltG[2]) * k] : [a.x, a.y, a.z];
+  const [ax, ay, az] = tiltG;
+  if (needCalib) calib.mode = Math.abs(ay) > Math.abs(az) ? 'camera' : 'wand';
+  const tx = Math.atan2(-ax, Math.hypot(ay, az)) / D2R;                       // tilt right = positive
+  const ty = (calib.mode === 'camera' ? Math.atan2(az, ay) : Math.atan2(ay, az)) / D2R;  // aim up = positive
+  cur.tx = tx; cur.ty = ty;
+  if (needCalib) {
+    calib.tx = tx; calib.ty = ty; needCalib = false;
+    $('ctl-msg').textContent = 'Tilt mode: tilt left/right and forward/back to aim. Recalibrate any time.';
+    $('ctl-msg').className = 'status ok';
+  }
+  gotEvent = true; events++;
+  sendAim(false);
 }
 
 function initPhone() {
@@ -437,15 +467,16 @@ function startSensors() {
   window.addEventListener('deviceorientationabsolute', onOrientation);
   dbg('sensor: waiting for data...');
   // nothing yet? try the Generic Sensor API
-  setTimeout(() => { if (events === 0) startGenericSensor(); }, 1200);
+  setTimeout(() => { if (events === 0) startGenericSensor(['RelativeOrientationSensor', 'AbsoluteOrientationSensor']); }, 1200);
+  setTimeout(() => { if (events === 0) startTilt(); }, 3500);
   // still nothing? show how to fix it and offer touch aiming
   setTimeout(() => {
     if (events === 0) {
       $('pad').classList.remove('hidden');
-      $('ctl-msg').textContent = 'No motion data. In Chrome: menu (three dots) > Settings > Site settings > Motion sensors > Allow, then reload. Use the touch pad meanwhile.';
+      $('ctl-msg').textContent = 'No motion data at all. Check Chrome Site settings > Motion sensors, and that Android Sensors Off is not enabled. Use the touch pad meanwhile.';
       $('ctl-msg').className = 'status bad';
     }
-  }, 3500);
+  }, 7000);
 }
 
 // Convert device orientation to a pointing direction (yaw/pitch in degrees).
@@ -485,7 +516,8 @@ function sendAim(force) {
   if (!force && now - lastSent < 16) return;
   lastSent = now;
   let yaw = 0, pitch = 0;
-  if (cur.top) {
+  if (src === 'tilt') { yaw = cur.tx - calib.tx; pitch = cur.ty - calib.ty; }
+  else if (cur.top) {
     const v = calib.mode === 'camera' ? cur.back : cur.top;
     const y = Math.atan2(v[0], v[1]) / D2R;
     const p = Math.asin(Math.max(-1, Math.min(1, v[2]))) / D2R;
