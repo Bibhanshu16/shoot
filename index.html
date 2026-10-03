@@ -374,22 +374,44 @@ function startTilt() {
   window.addEventListener('devicemotion', onMotion);
   dbg('sensor: tilt mode, waiting for accelerometer...');
 }
+// T.p = pointing axis: 'Y' = top edge is the barrel (pistol grip or flat), 'nZ' = back of phone (upright, camera style)
+const T = { p: 'Y', yaw: 0, roll0: 0, pitch0: 0, lastT: 0, gyroSum: 0, n: 0 };
 function onMotion(e) {
   if (src !== 'tilt') return;
   const a = e.accelerationIncludingGravity;
-  if (!a || a.x === null || a.y === null || a.z === null) return;
-  const k = 0.25;   // low-pass filter
-  tiltG = tiltG ? [tiltG[0] + (a.x - tiltG[0]) * k, tiltG[1] + (a.y - tiltG[1]) * k, tiltG[2] + (a.z - tiltG[2]) * k] : [a.x, a.y, a.z];
-  const [ax, ay, az] = tiltG;
-  if (needCalib) calib.mode = Math.abs(ay) > Math.abs(az) ? 'camera' : 'wand';
-  const tx = Math.atan2(-ax, Math.hypot(ay, az)) / D2R;                       // tilt right = positive
-  const ty = (calib.mode === 'camera' ? Math.atan2(az, ay) : Math.atan2(ay, az)) / D2R;  // aim up = positive
-  cur.tx = tx; cur.ty = ty;
+  if (!a || a.x == null || a.y == null || a.z == null) return;
+  const now = performance.now();
+  const dt = T.lastT ? Math.min(0.1, (now - T.lastT) / 1000) : 0; T.lastT = now;
+  const raw = [a.x, a.y, a.z], k = 0.3;   // low-pass filter on gravity
+  tiltG = tiltG ? tiltG.map((v, i) => v + (raw[i] - v) * k) : raw;
+  const m = Math.hypot(tiltG[0], tiltG[1], tiltG[2]) || 1;
+  const ux = tiltG[0] / m, uy = tiltG[1] / m, uz = tiltG[2] / m;   // "up" in device coordinates
+
+  if (needCalib) T.p = Math.abs(uy) > 0.7 ? 'nZ' : 'Y';
+  const pitch = Math.asin(Math.max(-1, Math.min(1, T.p === 'Y' ? uy : -uz))) / D2R;   // barrel elevation
+  const roll = (T.p === 'Y' ? Math.atan2(uz, ux) : Math.atan2(ux, uy)) / D2R;          // twist around the barrel
   if (needCalib) {
-    calib.tx = tx; calib.ty = ty; needCalib = false;
-    $('ctl-msg').textContent = 'Tilt mode: tilt left/right and forward/back to aim. Recalibrate any time.';
-    $('ctl-msg').className = 'status ok';
+    T.yaw = 0; T.roll0 = roll; T.pitch0 = pitch; T.n = 0; T.gyroSum = 0;
+    calib.tx = 0; calib.ty = 0; needCalib = false;
   }
+
+  // left/right: integrate the gyroscope if the phone reports one, otherwise use wrist twist
+  const r = e.rotationRate;
+  const hasRate = !!(r && r.alpha != null);
+  if (hasRate) T.gyroSum += Math.abs(r.alpha) + Math.abs(r.beta) + Math.abs(r.gamma);
+  T.n++;
+  const useGyro = hasRate && (T.n < 90 || T.gyroSum > 0);
+  if (useGyro) {
+    const w = r.beta * ux + r.gamma * uy + r.alpha * uz;   // turn rate around the vertical axis (deg/s)
+    if (Math.abs(w) > 0.3) T.yaw -= w * dt;
+    cur.tx = T.yaw;
+  } else {
+    cur.tx = (T.p === 'Y' ? 1 : -1) * shortDiff(roll, T.roll0);
+  }
+  cur.ty = pitch - T.pitch0;
+
+  $('ctl-msg').textContent = (T.p === 'Y' ? 'Pistol grip' : 'Upright grip') + (useGyro ? ': turn and raise to aim.' : ': raise/lower the barrel, twist your wrist left/right.') + ' Press Calibrate while pointing at the center.';
+  $('ctl-msg').className = 'status ok';
   gotEvent = true; events++;
   sendAim(false);
 }
