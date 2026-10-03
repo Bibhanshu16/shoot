@@ -95,6 +95,7 @@ input[type=range] { width:200px; accent-color:var(--amber); }
     <p class="status" id="dbg" style="font-size:.75rem;max-width:none">sensor: starting...</p>
     <div class="row">
       <button id="btn-calibrate" class="btn primary">Calibrate aim</button>
+      <button id="btn-mode" class="btn">Mode: Auto</button>
       <label class="row">Sensitivity <input type="range" id="slider-sens" min="5" max="30" value="15"></label>
     </div>
     <div id="pad" class="hidden">No motion sensor data. Drag here to aim.</div>
@@ -135,7 +136,7 @@ let canvas, ctx, rafId = null, timerId = null, lastT = 0;
 let G = null;                       // game state
 let aimTarget = { x: 0, y: 0 };     // where the phone points
 let crosshair = { x: 0, y: 0 };     // smoothed crosshair
-let hostSens = 15;
+let hostSens = 15, hostVel = null;
 let particles = [];
 
 function makeCode() {
@@ -170,6 +171,8 @@ function setHostStatus(t, cls) { const e = $('host-status'); e.textContent = t; 
 function onControllerData(d) {
   if (d.type === 'aim') {
     hostSens = d.sens;
+    if (d.mode === 'vel') { hostVel = { x: d.vx, y: d.vy, t: performance.now() }; return; }
+    hostVel = null;
     // degrees across the screen width = 750 / sensitivity
     const ppd = canvas ? canvas.width / (750 / d.sens) : 0;
     if (canvas) {
@@ -243,7 +246,11 @@ function loop(now) {
   const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
 
   // smooth crosshair toward the phone's aim
-  const k = 1 - Math.pow(0.001, dt);
+  if (hostVel && performance.now() - hostVel.t < 250) {      // joystick mode: phone sends speed, host moves the aim
+    aimTarget.x = Math.max(0, Math.min(canvas.width, aimTarget.x + hostVel.x * canvas.width * dt));
+    aimTarget.y = Math.max(0, Math.min(canvas.height, aimTarget.y - hostVel.y * canvas.width * dt));
+  }
+  const k = 1 - Math.exp(-dt / 0.035);
   crosshair.x += (aimTarget.x - crosshair.x) * k;
   crosshair.y += (aimTarget.y - crosshair.y) * k;
 
@@ -343,7 +350,25 @@ const D2R = Math.PI / 180;
 let sensorOn = false, gotEvent = false, needCalib = true, calib = { yaw: 0, pitch: 0, mode: 'wand' };
 let cur = { yaw: 0, pitch: 0, topZ: 0 }, touchOff = { yaw: 0, pitch: 0 };
 let sens = 15, lastSent = 0, wakeLock = null;
-let src = 'orient', events = 0, lastDbg = 0;
+let src = 'orient', events = 0, lastDbg = 0, ctlMode = null;
+// One Euro filter: strong smoothing when the hand is still, little lag when it moves
+function oneEuro(minCut, beta) {
+  let xp = null, dxp = 0, tp = 0;
+  const al = (c, dt) => 1 / (1 + 1 / (2 * Math.PI * c) / dt);
+  return (x, t) => {
+    if (xp === null) { xp = x; tp = t; return x; }
+    const dt = Math.max(1e-3, (t - tp) / 1000); tp = t;
+    dxp += ((x - xp) / dt - dxp) * al(1, dt);
+    xp += (x - xp) * al(minCut + beta * Math.abs(dxp), dt);
+    return xp;
+  };
+}
+let fX = oneEuro(1.2, 0.04), fY = oneEuro(1.2, 0.04);
+// joystick curve: dead zone in the middle, then speed grows smoothly with deflection
+function stick(d) {
+  const a = Math.abs(d); if (a <= 4) return 0;
+  return Math.sign(d) * Math.pow(Math.min(1, (a - 4) / 18), 1.5) * 1.4 * (sens / 15);
+}
 function dbg(t) { $('dbg').textContent = t; }
 
 // Fallback chain: Relative sensor (gyro) -> Absolute sensor (accel+compass) -> tilt mode (accelerometer only)
@@ -390,14 +415,17 @@ function onMotion(e) {
   if (!a || a.x == null || a.y == null || a.z == null) return;
   const now = performance.now();
   const dt = T.lastT ? Math.min(0.1, (now - T.lastT) / 1000) : 0; T.lastT = now;
-  const raw = [a.x, a.y, a.z], k = 0.3;   // low-pass filter on gravity
+  const raw = [a.x, a.y, a.z], k = 0.5;   // low-pass filter on gravity
   tiltG = tiltG ? tiltG.map((v, i) => v + (raw[i] - v) * k) : raw;
   const m = Math.hypot(tiltG[0], tiltG[1], tiltG[2]) || 1;
   const ux = tiltG[0] / m, uy = tiltG[1] / m, uz = tiltG[2] / m;   // "up" in device coordinates
 
   if (needCalib) T.p = Math.abs(uy) > 0.7 ? 'nZ' : 'Y';
   const pitch = Math.asin(Math.max(-1, Math.min(1, T.p === 'Y' ? uy : -uz))) / D2R;   // barrel elevation
-  const roll = (T.p === 'Y' ? Math.atan2(uz, ux) : Math.atan2(ux, uy)) / D2R;          // twist around the barrel
+  const rollRaw = (T.p === 'Y' ? Math.atan2(uz, ux) : Math.atan2(ux, uy)) / D2R;       // twist around the barrel
+  const perp = T.p === 'Y' ? Math.hypot(ux, uz) : Math.hypot(ux, uy);
+  const roll = (perp < 0.3 && T.lastRoll != null) ? T.lastRoll : rollRaw;            // unreliable when barrel points steeply up/down
+  T.lastRoll = roll;
   if (needCalib) {
     T.yaw = 0; T.roll0 = roll; T.pitch0 = pitch; T.n = 0; T.gyroSum = 0;
     calib.tx = 0; calib.ty = 0; needCalib = false;
@@ -434,8 +462,12 @@ function onMotion(e) {
 function initPhone() {
   $('btn-connect').onclick = connectToHost;
   $('btn-enable-motion').onclick = requestMotion;
-  $('btn-calibrate').onclick = () => { needCalib = true; touchOff = { yaw: 0, pitch: 0 }; send({ type: 'recenter' }); if (navigator.vibrate) navigator.vibrate([30, 30, 30]); };
+  $('btn-calibrate').onclick = () => { needCalib = true; touchOff = { yaw: 0, pitch: 0 }; send({ type: 'recenter' }); fX = oneEuro(1.2, 0.04); fY = oneEuro(1.2, 0.04); if (navigator.vibrate) navigator.vibrate([30, 30, 30]); };
   $('btn-disconnect').onclick = () => location.reload();
+  $('btn-mode').onclick = () => {
+    const m = ctlMode || (src === 'tilt' && T.ysrc === 'twist' ? 'joystick' : 'direct');
+    ctlMode = m === 'joystick' ? 'direct' : 'joystick';
+  };
   $('slider-sens').oninput = e => { sens = +e.target.value; };
 
   const shootBtn = $('btn-shoot');
@@ -562,7 +594,11 @@ function sendAim(force) {
     pitch = p - calib.pitch;
   }
   if (now - lastDbg > 250) { lastDbg = now; dbg('sensor: ' + src + (src === 'tilt' ? '/' + T.ysrc + (T.gErr ? ' (gyro: ' + T.gErr + ')' : '') : '') + ' | events ' + events + ' | yaw ' + yaw.toFixed(0) + ' pitch ' + pitch.toFixed(0)); }
-  send({ type: 'aim', yaw: yaw + touchOff.yaw, pitch: pitch + touchOff.pitch, sens });
+  yaw = fX(yaw + touchOff.yaw, now); pitch = fY(pitch + touchOff.pitch, now);
+  const mode = ctlMode || (src === 'tilt' && T.ysrc === 'twist' ? 'joystick' : 'direct');
+  if (now - lastDbg < 5) $('btn-mode').textContent = 'Mode: ' + (mode === 'joystick' ? 'Joystick' : 'Direct');
+  if (mode === 'joystick') send({ type: 'aim', mode: 'vel', vx: stick(yaw), vy: stick(pitch), sens });
+  else send({ type: 'aim', mode: 'pos', yaw, pitch, sens });
 }
 function shortDiff(a, b) { let d = a - b; while (d < -180) d += 360; while (d > 180) d -= 360; return d; }
 
